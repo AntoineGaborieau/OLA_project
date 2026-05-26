@@ -1,32 +1,33 @@
 import numpy as np
 from scipy.optimize import milp, LinearConstraint, Bounds
 
-class Simulation:
-    def __init__(self, env, agent, horizon, budget, values, conflict_edges):
+class SingleCampaignSimulation:
+    def __init__(self, env, agent, horizon, budget, value):
         self.env = env
         self.agent = agent
         self.T = horizon
-        self.B = budget
-        self.v = values
-        self.conflict_edges = conflict_edges
+        self.B = float(budget)
+        self.v = float(value)
         
         self.rewards = np.zeros(self.T)
         self.costs = np.zeros(self.T)
         
     def run(self):
         for t in range(self.T):
-            if self.agent.budget_remaining <= 0:
-                break
-                
-            b_t = self.agent.bid()
+            # 1. Pull arm from Slide 14 agent interface
+            b_t = self.agent.pull_arm()
             
-            won_mask, utilities, costs = self.env.resolve_auctions(b_t)
+            # 2. Resolve via single campaign environment
+            won, utility, cost = self.env.resolve_auction(b_t)
             
-            self.agent.update(won_mask, utilities, costs)
+            # 3. Inform the agent of the auction feedback
+            self.agent.update(won, utility, cost)
             
-            self.rewards[t] = np.sum(utilities)
-            self.costs[t] = np.sum(costs)
+            # 4. Record history
+            self.rewards[t] = utility
+            self.costs[t] = cost
             
+        # Calculate regret relative to the exact offline Knapsack optimal
         clairvoyant_reward = self.compute_clairvoyant_optimal()
         agent_cumulative_reward = np.sum(self.rewards)
         terminal_regret = clairvoyant_reward - agent_cumulative_reward
@@ -34,44 +35,22 @@ class Simulation:
         return self.rewards, self.costs, terminal_regret
         
     def compute_clairvoyant_optimal(self):
-        m_seq = self.env.get_m_sequence()
-        N = self.v.shape[0]
-        num_vars = self.T * N
+        m_seq = self.env.get_m_sequence().flatten()
         
-        utilities = self.v[np.newaxis, :] - m_seq
-        utilities[utilities < 0] = 0
+        # Net utility for winning each specific round
+        utilities = self.v - m_seq
+        utilities[utilities < 0] = 0.0
         
-        c = -utilities.flatten()
-        
-        A_budget = m_seq.flatten().reshape(1, -1)
-        b_u_budget = np.array([self.B])
-        
-        num_conflicts = self.T * len(self.conflict_edges)
-        if num_conflicts > 0:
-            A_conflict = np.zeros((num_conflicts, num_vars))
-            row_idx = 0
-            for t in range(self.T):
-                for i, j in self.conflict_edges:
-                    A_conflict[row_idx, t*N + i] = 1
-                    A_conflict[row_idx, t*N + j] = 1
-                    row_idx += 1
-                    
-            b_u_conflict = np.ones(num_conflicts)
-            
-            A = np.vstack([A_budget, A_conflict])
-            b_u = np.concatenate([b_u_budget, b_u_conflict])
-        else:
-            A = A_budget
-            b_u = b_u_budget
-            
-        b_l = np.full_like(b_u, -np.inf)
+        c = -utilities
+        A = m_seq.reshape(1, -1)
+        b_u = np.array([self.B])
+        b_l = np.array([-np.inf])
         
         constraints = LinearConstraint(A, b_l, b_u)
         bounds = Bounds(0, 1)
         integrality = np.ones_like(c)
         
         res = milp(c=c, constraints=constraints, bounds=bounds, integrality=integrality)
-        
         if not res.success:
             raise ValueError("MILP solver failed to compute clairvoyant optimal.")
             

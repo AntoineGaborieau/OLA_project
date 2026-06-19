@@ -11,6 +11,10 @@ class SingleCampaignBaseLearner:
         self.wins = np.zeros(self.K, dtype=float)
         self.last_action_idx = None
 
+    def pull_arm(self):
+        """Interface method mapped to your environment simulation loop."""
+        return self.bid()
+
     def bid(self):
         raise NotImplementedError
 
@@ -19,6 +23,7 @@ class SingleCampaignBaseLearner:
         self.wins[self.last_action_idx] += float(won)
         self.t += 1
 
+
 class SingleCampaignUCB1(SingleCampaignBaseLearner):
     """Algorithm 1: Standard UCB1 ignoring the budget constraint."""
     def bid(self):
@@ -26,12 +31,13 @@ class SingleCampaignUCB1(SingleCampaignBaseLearner):
             action_idx = self.t
         else:
             p_hat = self.wins / self.pulls
-            ucb = np.minimum(p_hat + np.sqrt(2 * np.log(self.t) / self.pulls), 1.0)
+            ucb = np.minimum(p_hat + np.sqrt(2 * np.log(float(self.t)) / self.pulls), 1.0)
             expected_utility = (self.v - self.bid_space) * ucb
             action_idx = np.argmax(expected_utility)
             
         self.last_action_idx = action_idx
         return self.bid_space[action_idx]
+
 
 class SingleCampaignBudgetUCB1(SingleCampaignUCB1):
     """Algorithm 2: Extended UCB1 handling the budget constraint."""

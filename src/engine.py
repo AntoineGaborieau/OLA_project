@@ -2,32 +2,26 @@ import numpy as np
 from scipy.optimize import milp, LinearConstraint, Bounds
 
 class SingleCampaignSimulation:
-    def __init__(self, env, agent, horizon, budget, value):
+    def __init__(self, env, agent, horizon, budget, value, bid_space):
         self.env = env
         self.agent = agent
         self.T = horizon
         self.B = float(budget)
         self.v = float(value)
+        self.bid_space = np.array(bid_space, dtype=float)
         
         self.rewards = np.zeros(self.T)
         self.costs = np.zeros(self.T)
         
     def run(self):
         for t in range(self.T):
-            # 1. Pull arm from Slide 14 agent interface
             b_t = self.agent.pull_arm()
-            
-            # 2. Resolve via single campaign environment
             won, utility, cost = self.env.resolve_auction(b_t)
-            
-            # 3. Inform the agent of the auction feedback
             self.agent.update(won, utility, cost)
             
-            # 4. Record history
             self.rewards[t] = utility
             self.costs[t] = cost
             
-        # Calculate regret relative to the exact offline Knapsack optimal
         clairvoyant_reward = self.compute_clairvoyant_optimal()
         agent_cumulative_reward = np.sum(self.rewards)
         terminal_regret = clairvoyant_reward - agent_cumulative_reward
@@ -36,22 +30,43 @@ class SingleCampaignSimulation:
         
     def compute_clairvoyant_optimal(self):
         m_seq = self.env.get_m_sequence().flatten()
+        K = len(self.bid_space)
+        num_vars = self.T * K
         
-        # Net utility for winning each specific round
-        utilities = self.v - m_seq
-        utilities[utilities < 0] = 0.0
+        # Build utilities and costs matrices over all choices for all rounds
+        # Shape: (T, K)
+        bids_matrix = self.bid_space[np.newaxis, :]
+        m_matrix = m_seq[:, np.newaxis]
         
-        c = -utilities
-        A = m_seq.reshape(1, -1)
-        b_u = np.array([self.B])
-        b_l = np.array([-np.inf])
+        won_matrix = (bids_matrix >= m_matrix).astype(float)
+        
+        utilities = (self.v - bids_matrix) * won_matrix
+        costs = bids_matrix * won_matrix
+        
+        # Flatten for MILP solver format
+        c = -utilities.flatten()
+        
+        # Constraint 1: Capital Budget limit over the entire horizon
+        A_budget = costs.flatten().reshape(1, -1)
+        b_u_budget = np.array([self.B])
+        
+        # Constraint 2: The clairvoyant can select exactly ONE discrete bid per round t
+        A_one_bid = np.zeros((self.T, num_vars))
+        for t in range(self.T):
+            A_one_bid[t, t*K : (t+1)*K] = 1.0
+        b_u_one_bid = np.ones(self.T)
+        
+        # Combine linear bounds matrices
+        A = np.vstack([A_budget, A_one_bid])
+        b_u = np.concatenate([b_u_budget, b_u_one_bid])
+        b_l = np.concatenate([[-np.inf], np.ones(self.T)]) # Use equality for the single action choice
         
         constraints = LinearConstraint(A, b_l, b_u)
         bounds = Bounds(0, 1)
-        integrality = np.ones_like(c)
+        integrality = np.ones_like(c) # Binary choices
         
         res = milp(c=c, constraints=constraints, bounds=bounds, integrality=integrality)
         if not res.success:
-            raise ValueError("MILP solver failed to compute clairvoyant optimal.")
+            raise ValueError("MILP solver failed to compute discrete clairvoyant optimal.")
             
         return -res.fun

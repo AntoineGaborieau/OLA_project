@@ -22,51 +22,54 @@ class SingleCampaignSimulation:
             self.rewards[t] = utility
             self.costs[t] = cost
             
-        clairvoyant_reward = self.compute_clairvoyant_optimal()
-        agent_cumulative_reward = np.sum(self.rewards)
-        terminal_regret = clairvoyant_reward - agent_cumulative_reward
+        # Extract the true step-by-step cumulative trajectory vector
+        clairvoyant_trajectory = self.compute_clairvoyant_optimal()
+        agent_cumulative_reward = np.cumsum(self.rewards)
+        regret_curve = clairvoyant_trajectory - agent_cumulative_reward
         
-        return self.rewards, self.costs, terminal_regret
+        return self.rewards, self.costs, regret_curve
         
     def compute_clairvoyant_optimal(self):
         m_seq = self.env.get_m_sequence().flatten()
         K = len(self.bid_space)
         num_vars = self.T * K
         
-        # Build utilities and costs matrices over all choices for all rounds
-        # Shape: (T, K)
         bids_matrix = self.bid_space[np.newaxis, :]
         m_matrix = m_seq[:, np.newaxis]
         
         won_matrix = (bids_matrix >= m_matrix).astype(float)
-        
         utilities = (self.v - bids_matrix) * won_matrix
         costs = bids_matrix * won_matrix
         
-        # Flatten for MILP solver format
         c = -utilities.flatten()
         
-        # Constraint 1: Capital Budget limit over the entire horizon
+        # Constraint 1: Budget limit over the horizon
         A_budget = costs.flatten().reshape(1, -1)
         b_u_budget = np.array([self.B])
         
-        # Constraint 2: The clairvoyant can select exactly ONE discrete bid per round t
+        # Constraint 2: Exactly ONE discrete bid choice per round t
         A_one_bid = np.zeros((self.T, num_vars))
         for t in range(self.T):
             A_one_bid[t, t*K : (t+1)*K] = 1.0
         b_u_one_bid = np.ones(self.T)
         
-        # Combine linear bounds matrices
         A = np.vstack([A_budget, A_one_bid])
         b_u = np.concatenate([b_u_budget, b_u_one_bid])
-        b_l = np.concatenate([[-np.inf], np.ones(self.T)]) # Use equality for the single action choice
+        b_l = np.concatenate([[-np.inf], np.ones(self.T)])
         
         constraints = LinearConstraint(A, b_l, b_u)
         bounds = Bounds(0, 1)
-        integrality = np.ones_like(c) # Binary choices
+        integrality = np.ones_like(c)
         
         res = milp(c=c, constraints=constraints, bounds=bounds, integrality=integrality)
         if not res.success:
-            raise ValueError("MILP solver failed to compute discrete clairvoyant optimal.")
+            raise ValueError("MILP solver failed.")
             
-        return -res.fun
+        # Reshape solution binary mask back to shape (T, K)
+        chosen_actions_mask = res.x.reshape(self.T, K)
+        
+        # Extract the exact utility obtained by the solver at each round t
+        round_rewards = np.sum(utilities * chosen_actions_mask, axis=1)
+        
+        # Return the true chronological cumulative sum array
+        return np.cumsum(round_rewards)

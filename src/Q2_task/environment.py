@@ -38,6 +38,6 @@ class MultiCampaignEnvironment(BaseEnvironment):
 
         cost = bid if won else 0.0
         utility = self.values[campaign_idx] - bid if won else 0.0
-
         self.t += 1
         return campaign_idx, won, utility, cost
+

@@ -33,3 +33,31 @@ class SingleCampaignUCB1Learner(SingleCampaignBaseLearner):
             self.last_action_idx = np.argmax(ucb_indices)
             
         return self.last_action_idx
+
+class SmartUCB1Agent(SingleCampaignUCB1Learner):
+    def bid(self):
+        # Optimized initialization: Only pull physically uninitialized arms
+        uninitialized_indices = np.where(self.pulls == 0)[0]
+        if len(uninitialized_indices) > 0:
+            self.last_action_idx = uninitialized_indices[0]
+        else:
+            exploration_radius = np.sqrt(2 * np.log(np.maximum(self.t, 1.0)) / self.pulls)
+            ucb_indices = self.average_rewards + exploration_radius
+            self.last_action_idx = np.argmax(ucb_indices)
+            
+        return self.last_action_idx
+
+    def update(self, won, utility, cost):
+        if won:
+            inferred_indices = np.arange(self.last_action_idx, self.K)
+            inferred_utilities = self.v - self.bid_space[inferred_indices]
+        else:
+            inferred_indices = np.arange(0, self.last_action_idx + 1)
+            inferred_utilities = 0.0
+            
+        self.pulls[inferred_indices] += 1
+        
+        self.average_rewards[inferred_indices] += (
+            (inferred_utilities - self.average_rewards[inferred_indices]) / self.pulls[inferred_indices]
+        )
+        self.t += 1

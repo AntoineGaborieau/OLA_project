@@ -17,10 +17,10 @@ class SingleCampaignBaseLearner:
     def bid(self):
         raise NotImplementedError
 
-    def update(self, won, utility, cost):
+    def update(self, won, reward, cost):
         self.pulls[self.last_action_idx] += 1
         n = self.pulls[self.last_action_idx]
-        self.average_rewards[self.last_action_idx] += (utility - self.average_rewards[self.last_action_idx]) / n
+        self.average_rewards[self.last_action_idx] += (reward - self.average_rewards[self.last_action_idx]) / n
         self.t += 1
 
 class SingleCampaignUCB1Learner(SingleCampaignBaseLearner):

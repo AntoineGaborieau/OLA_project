@@ -30,7 +30,7 @@ class SingleCampaignEnvironment(BaseEnvironment):
         won = float(b_t >= m_t)
         
         cost = float(b_t) if won else 0.0
-        utility = float(self.v - b_t) if won else 0.0
+        reward = float(self.v - b_t) if won else 0.0
         
         self.t += 1
-        return won, utility, cost
+        return won, reward, cost

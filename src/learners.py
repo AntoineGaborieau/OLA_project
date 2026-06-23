@@ -12,7 +12,6 @@ class SingleCampaignBaseLearner:
         self.last_action_idx = None
 
     def pull_arm(self):
-        """Interface method mapped to your environment simulation loop."""
         return self.bid()
 
     def bid(self):

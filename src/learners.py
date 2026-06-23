@@ -8,7 +8,7 @@ class SingleCampaignBaseLearner:
         self.t = 0
         
         self.pulls = np.zeros(self.K, dtype=float)
-        self.wins = np.zeros(self.K, dtype=float)
+        self.average_rewards = np.zeros(self.K, dtype=float)
         self.last_action_idx = None
 
     def pull_arm(self):
@@ -19,51 +19,17 @@ class SingleCampaignBaseLearner:
 
     def update(self, won, utility, cost):
         self.pulls[self.last_action_idx] += 1
-        self.wins[self.last_action_idx] += float(won)
+        n = self.pulls[self.last_action_idx]
+        self.average_rewards[self.last_action_idx] += (utility - self.average_rewards[self.last_action_idx]) / n
         self.t += 1
 
-
-class SingleCampaignUCB1(SingleCampaignBaseLearner):
-    """Algorithm 1: Standard UCB1 ignoring the budget constraint."""
+class SingleCampaignUCB1Learner(SingleCampaignBaseLearner):
     def bid(self):
         if self.t < self.K:
-            action_idx = self.t
+            self.last_action_idx = self.t
         else:
-            p_hat = self.wins / self.pulls
-            ucb = np.minimum(p_hat + np.sqrt(2 * np.log(float(self.t)) / self.pulls), 1.0)
-            expected_utility = (self.v - self.bid_space) * ucb
-            action_idx = np.argmax(expected_utility)
+            exploration_radius = np.sqrt(2 * np.log(np.maximum(self.t, 1.0)) / self.pulls)
+            ucb_indices = self.average_rewards + exploration_radius
+            self.last_action_idx = np.argmax(ucb_indices)
             
-        self.last_action_idx = action_idx
-        return self.bid_space[action_idx]
-
-
-class SingleCampaignBudgetUCB1(SingleCampaignUCB1):
-    """Algorithm 2: Extended UCB1 handling the budget constraint."""
-    def __init__(self, value, bid_space, budget):
-        super().__init__(value, bid_space)
-        self.budget_remaining = float(budget)
-
-    def bid(self):
-        affordable_mask = self.bid_space <= self.budget_remaining
-        if not np.any(affordable_mask):
-            return 0.0 # Force zero bid if budget is entirely depleted
-
-        if self.t < self.K and affordable_mask[self.t]:
-            action_idx = self.t
-        else:
-            safe_pulls = np.where(self.pulls > 0, self.pulls, 1.0)
-            p_hat = np.where(self.pulls > 0, self.wins / safe_pulls, 1.0)
-            exploration = np.where(self.pulls > 0, np.sqrt(2 * np.log(float(max(self.t, 1))) / safe_pulls), 1.0)
-                
-            ucb = np.minimum(p_hat + exploration, 1.0)
-            expected_utility = (self.v - self.bid_space) * ucb
-            expected_utility[~affordable_mask] = -1e9 # Mask unaffordable actions
-            action_idx = np.argmax(expected_utility)
-            
-        self.last_action_idx = action_idx
-        return self.bid_space[action_idx]
-
-    def update(self, won, utility, cost):
-        super().update(won, utility, cost)
-        self.budget_remaining -= float(cost)
+        return self.last_action_idx

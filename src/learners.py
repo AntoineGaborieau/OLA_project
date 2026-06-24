@@ -86,10 +86,10 @@ class BudgetConstrainedUCBAgent(SingleCampaignBaseLearner):
         if self.t < self.K:
             self.a_t = self.t
         else:
-            radius = np.sqrt(2 * np.log(self.T_horizon) / self.N_pulls)
+            radius = np.sqrt(2 * np.log(self.t) / self.N_pulls)
             
-            f_ucbs = np.minimum(self.avg_f + (self.v * radius), self.v)
-            c_lcbs = np.maximum(self.avg_c - (1.0 * radius), 0.0)
+            f_ucbs = self.avg_f + (self.v * radius)
+            c_lcbs = self.avg_c - (1.0 * radius)
             
             gamma_t = self.compute_opt(f_ucbs, c_lcbs)
             self.a_t = np.random.choice(self.K, p=gamma_t)
@@ -98,21 +98,18 @@ class BudgetConstrainedUCBAgent(SingleCampaignBaseLearner):
         return self.a_t
 
     def compute_opt(self, f_ucbs, c_lcbs):
+        if np.sum(c_lcbs <= np.zeros(len(c_lcbs))):
+            gamma = np.zeros(len(f_ucbs))
+            gamma[np.argmax(f_ucbs)] = 1
+            return gamma
         c = -f_ucbs
         A_ub = [c_lcbs]
         b_ub = [self.rho]
         A_eq = [np.ones(self.K)]
-        b_eq = [1.0]
-        
-        res = optimize.linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=(0, 1), method='highs-ds')
-        
-        if res.success:
-            return res.x
-        else:
-            gamma = np.zeros(self.K)
-            gamma[np.argmin(c_lcbs)] = 1.0
-            print("min cost arm instead of LP")
-            return gamma
+        b_eq = [1]
+        res = optimize.linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=(0,1))
+        gamma = res.x
+        return gamma
 
     def update(self, won, utility, cost):
         self.N_pulls[self.a_t] += 1

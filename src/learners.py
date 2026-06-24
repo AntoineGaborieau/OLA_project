@@ -62,63 +62,120 @@ class SmartUCB1Agent(SingleCampaignUCB1Learner):
             (inferred_utilities - self.average_rewards[inferred_indices]) / self.pulls[inferred_indices]
         )
         self.t += 1
+import numpy as np
+from scipy import optimize
+# Assuming SingleCampaignBaseLearner and SingleCampaignUCB1Learner are defined above
 
 class BudgetConstrainedUCBAgent(SingleCampaignBaseLearner):
     def __init__(self, value, bid_space, B, T):
         super().__init__(value, bid_space)
         self.T_horizon = float(T)
+        self.budget = float(B)
         
         self.a_t = None
         self.avg_f = np.zeros(self.K)
         self.avg_c = np.zeros(self.K)
         self.N_pulls = np.zeros(self.K)
-        
-        self.budget = float(B)
-        self.rho = self.budget / self.T_horizon
-        self.t = 0
+        self.spent = 0.0
 
     def pull_arm(self):
-        if self.budget < 1.0:
-            self.a_t = 0 # Force selection of bid 0.0 to accumulate zero cost
+        if self.t < self.K:
+            self.a_t = self.t
             self.last_action_idx = self.a_t
             return self.a_t
             
-        if self.t < self.K:
-            self.a_t = self.t
-        else:
-            radius = np.sqrt(2 * np.log(self.t) / self.N_pulls)
-            
-            f_ucbs = self.avg_f + (self.v * radius)
-            c_lcbs = self.avg_c - (1.0 * radius)
-            
-            gamma_t = self.compute_opt(f_ucbs, c_lcbs)
-            self.a_t = np.random.choice(self.K, p=gamma_t)
+        radius = np.sqrt(2 * np.log(self.T_horizon) / self.N_pulls)
+        
+        f_ucbs = np.minimum(self.avg_f + (self.v * radius), self.v)
+        # 1e-8 Regularization prevents simplex degeneracy
+        c_lcbs = np.maximum(self.avg_c - (1.0 * radius), 1e-8) 
+        
+        gamma_t = self.compute_opt(f_ucbs, c_lcbs)
+        self.a_t = np.random.choice(self.K, p=gamma_t)
             
         self.last_action_idx = self.a_t
         return self.a_t
 
     def compute_opt(self, f_ucbs, c_lcbs):
-        if np.sum(c_lcbs <= np.zeros(len(c_lcbs))):
-            gamma = np.zeros(len(f_ucbs))
-            gamma[np.argmax(f_ucbs)] = 1
-            return gamma
+        remaining_budget = self.budget - self.spent
+        remaining_rounds = np.maximum(self.T_horizon - self.t, 1.0)
+        
+        # Dynamic Pacing (rho_t)
+        rho_t = remaining_budget / remaining_rounds
+        
         c = -f_ucbs
         A_ub = [c_lcbs]
-        b_ub = [self.rho]
+        b_ub = [rho_t]
         A_eq = [np.ones(self.K)]
-        b_eq = [1]
-        res = optimize.linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=(0,1))
-        gamma = res.x
-        return gamma
+        b_eq = [1.0]
+        
+        res = optimize.linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=(0, 1), method='highs-ds')
+        
+        if res.success:
+            gamma = np.clip(res.x, 0, 1)
+            gamma /= np.sum(gamma)
+            return gamma
+        else:
+            gamma = np.zeros(self.K)
+            gamma[np.argmin(c_lcbs)] = 1.0
+            return gamma
 
     def update(self, won, utility, cost):
         self.N_pulls[self.a_t] += 1
+        n = self.N_pulls[self.a_t]
         
-        self.avg_f[self.a_t] += (utility - self.avg_f[self.a_t]) / self.N_pulls[self.a_t]
-        self.avg_c[self.a_t] += (cost - self.avg_c[self.a_t]) / self.N_pulls[self.a_t]
+        self.avg_f[self.a_t] += (utility - self.avg_f[self.a_t]) / n
+        self.avg_c[self.a_t] += (cost - self.avg_c[self.a_t]) / n
         
-        self.budget -= cost
-        
+        self.spent += cost
         self.pulls = self.N_pulls
         self.average_rewards = self.avg_f
+        self.t += 1
+
+
+class HeuristicBudgetUCBAgent(SingleCampaignBaseLearner):
+    def __init__(self, value, bid_space, B, T):
+        super().__init__(value, bid_space)
+        self.budget = float(B)
+        self.T_horizon = float(T)
+        self.a_t = None
+        self.average_costs = np.zeros(self.K)
+        self.spent = 0.0
+
+    def pull_arm(self):
+        remaining_budget = self.budget - self.spent
+        remaining_rounds = self.T_horizon - self.t
+
+        if remaining_budget <= 0 or remaining_rounds <= 0:
+            self.a_t = 0
+            self.last_action_idx = self.a_t
+            return self.a_t
+
+        if self.t < self.K:
+            self.a_t = self.t
+            self.last_action_idx = self.a_t
+            return self.a_t
+
+        budget_per_round = remaining_budget / remaining_rounds
+        ucbs = self.average_rewards + np.sqrt(2 * np.log(self.T_horizon) / self.pulls)
+        
+        affordable = self.average_costs <= budget_per_round
+
+        if not np.any(affordable):
+            self.a_t = 0
+        else:
+            masked_ucbs = np.where(affordable, ucbs, -np.inf)
+            self.a_t = np.argmax(masked_ucbs)
+
+        self.last_action_idx = self.a_t
+        return self.a_t
+
+    def update(self, won, utility, cost):
+        self.pulls[self.a_t] += 1
+        n = self.pulls[self.a_t]
+        
+        self.average_rewards[self.a_t] += (utility - self.average_rewards[self.a_t]) / n
+        self.average_costs[self.a_t] += (cost - self.average_costs[self.a_t]) / n
+        
+        self.spent += cost
         self.t += 1

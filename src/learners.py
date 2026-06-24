@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import optimize
 
 class SingleCampaignBaseLearner:
     def __init__(self, value, bid_space):

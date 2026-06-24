@@ -61,3 +61,66 @@ class SmartUCB1Agent(SingleCampaignUCB1Learner):
             (inferred_utilities - self.average_rewards[inferred_indices]) / self.pulls[inferred_indices]
         )
         self.t += 1
+
+class BudgetConstrainedUCBAgent(SingleCampaignBaseLearner):
+    def __init__(self, value, bid_space, B, T):
+        super().__init__(value, bid_space)
+        self.T_horizon = float(T)
+        
+        self.a_t = None
+        self.avg_f = np.zeros(self.K)
+        self.avg_c = np.zeros(self.K)
+        self.N_pulls = np.zeros(self.K)
+        
+        self.budget = float(B)
+        self.rho = self.budget / self.T_horizon
+        self.t = 0
+
+    def pull_arm(self):
+        if self.budget < 1.0:
+            self.a_t = 0 # Force selection of bid 0.0 to accumulate zero cost
+            self.last_action_idx = self.a_t
+            return self.a_t
+            
+        if self.t < self.K:
+            self.a_t = self.t
+        else:
+            radius = np.sqrt(2 * np.log(self.T_horizon) / self.N_pulls)
+            
+            f_ucbs = np.minimum(self.avg_f + (self.v * radius), self.v)
+            c_lcbs = np.maximum(self.avg_c - (1.0 * radius), 0.0)
+            
+            gamma_t = self.compute_opt(f_ucbs, c_lcbs)
+            self.a_t = np.random.choice(self.K, p=gamma_t)
+            
+        self.last_action_idx = self.a_t
+        return self.a_t
+
+    def compute_opt(self, f_ucbs, c_lcbs):
+        c = -f_ucbs
+        A_ub = [c_lcbs]
+        b_ub = [self.rho]
+        A_eq = [np.ones(self.K)]
+        b_eq = [1.0]
+        
+        res = optimize.linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=(0, 1), method='highs-ds')
+        
+        if res.success:
+            return res.x
+        else:
+            gamma = np.zeros(self.K)
+            gamma[np.argmin(c_lcbs)] = 1.0
+            print("min cost arm instead of LP")
+            return gamma
+
+    def update(self, won, utility, cost):
+        self.N_pulls[self.a_t] += 1
+        
+        self.avg_f[self.a_t] += (utility - self.avg_f[self.a_t]) / self.N_pulls[self.a_t]
+        self.avg_c[self.a_t] += (cost - self.avg_c[self.a_t]) / self.N_pulls[self.a_t]
+        
+        self.budget -= cost
+        
+        self.pulls = self.N_pulls
+        self.average_rewards = self.avg_f
+        self.t += 1

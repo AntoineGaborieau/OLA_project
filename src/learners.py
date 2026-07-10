@@ -37,7 +37,6 @@ class SingleCampaignUCB1Learner(SingleCampaignBaseLearner):
 
 class SmartUCB1Agent(SingleCampaignUCB1Learner):
     def bid(self):
-        # Optimized initialization: Only pull physically uninitialized arms
         uninitialized_indices = np.where(self.pulls == 0)[0]
         if len(uninitialized_indices) > 0:
             self.last_action_idx = uninitialized_indices[0]
@@ -62,9 +61,8 @@ class SmartUCB1Agent(SingleCampaignUCB1Learner):
             (inferred_utilities - self.average_rewards[inferred_indices]) / self.pulls[inferred_indices]
         )
         self.t += 1
-import numpy as np
-from scipy import optimize
-# Assuming SingleCampaignBaseLearner and SingleCampaignUCB1Learner are defined above
+        
+
 
 class BudgetConstrainedUCBAgent(SingleCampaignBaseLearner):
     def __init__(self, value, bid_space, B, T):
